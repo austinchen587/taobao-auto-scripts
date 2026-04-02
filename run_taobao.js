@@ -1,149 +1,141 @@
 const { JSDOM } = require("jsdom");
 const fs = require("fs");
-const vm = require("vm");
 
-// 1. 深度模拟淘宝浏览器环境
-const dom = new JSDOM(`<!DOCTYPE html><html><head>
-    <script id="kissy-seed" src="https://g.alicdn.com/??kissy/k/6.2.4/seed-min.js,kg/global-util/1.0.7/index-min.js"></script>
-</head><body><div id="J_SiteNav"></div></body></html>`, {
-    url: "https://www.taobao.com/", 
+// 1. 初始化 JSDOM (移除 ResourceLoader，使用 pretendToBeVisual 模拟视觉特征)
+const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Taobao</title></head><body><div id="J_SiteNav"></div></body></html>`, {
+    url: "https://s.taobao.com/search?q=%E6%89%8B%E6%9C%BA",
     referrer: "https://www.taobao.com/",
-    runScripts: "dangerously"
+    userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    runScripts: "dangerously",
+    pretendToBeVisual: true 
 });
 
 const { window } = dom;
 
-// 2. 伪装 Navigator
-Object.defineProperties(window.navigator, {
-    webdriver: { get: () => undefined },
-    languages: { get: () => ['zh-CN', 'zh'] },
-    platform: { get: () => 'MacIntel' }
+// 2. 深度特征伪造 (直接挂载到 JSDOM 的 window 上)
+// 伪造 webdriver (必须是 false，不能抛出异常)
+Object.defineProperty(window.navigator, 'webdriver', { get: () => false });
+Object.defineProperty(window.navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
+Object.defineProperty(window.navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+window.chrome = { app: {}, runtime: {} };
+
+// 伪造 Screen
+Object.defineProperties(window.screen, {
+    width: { get: () => 1920 },
+    height: { get: () => 1080 },
+    availWidth: { get: () => 1920 },
+    availHeight: { get: () => 1040 },
+    colorDepth: { get: () => 24 },
+    pixelDepth: { get: () => 24 }
 });
 
-// ★ 核心修复：伪造完美的 performance.timing，防止 VMP 初始化崩溃 ★
-const now = Date.now();
-const mockPerformance = window.performance || {};
-mockPerformance.timing = {
-    navigationStart: now - 5000,
-    fetchStart: now - 5000,
-    domainLookupStart: now - 4000,
-    domainLookupEnd: now - 3900,
-    connectStart: now - 3800,
-    connectEnd: now - 3700,
-    requestStart: now - 3600,
-    responseStart: now - 3500,
-    responseEnd: now - 3400,
-    domLoading: now - 3000,
-    domInteractive: now - 2000,
-    domContentLoadedEventStart: now - 1500,
-    domContentLoadedEventEnd: now - 1500,
-    domComplete: now - 500,
-    loadEventStart: now - 100, // 刚才就是死在这里
-    loadEventEnd: now
-};
-mockPerformance.getEntriesByType = () => [];
-mockPerformance.getEntriesByName = () => [];
-mockPerformance.getEntries = () => [];
-
-// 3. 构建沙箱上下文
-const context = {
-    window: window,
-    document: window.document,
-    navigator: window.navigator,
-    location: window.location,
-    screen: window.screen,
-    performance: mockPerformance, // 使用伪造的 performance
-    history: window.history,
-    setTimeout: setTimeout,
-    clearTimeout: clearTimeout,
-    setInterval: setInterval,
-    clearInterval: clearInterval,
-    requestAnimationFrame: (cb) => setTimeout(cb, 16),
-    cancelAnimationFrame: (id) => clearTimeout(id),
-    MutationObserver: window.MutationObserver,
-    console: console,
-    Image: window.Image,
-    Date: Date,
-    Math: Math,
-    
-    "currentScript": window.document.getElementById("kissy-seed"),
-
-    define: function(id, deps, factory) {
-        let f = typeof factory === 'function' ? factory : (typeof deps === 'function' ? deps : id);
-        if (typeof f === 'function') { try { f(); } catch(e) {} }
-    },
-
-    PerformanceObserver: class {
-        constructor(cb) { this.cb = cb; }
-        observe() { if(this.cb) this.cb({ getEntries: () => [] }); }
-        disconnect() {}
-        takeRecords() { return []; }
-    },
-
-    MessageChannel: class {
-        constructor() {
-            this.port1 = { onmessage: null, close: () => {} };
-            this.port2 = { postMessage: (d) => { if(this.port1.onmessage) this.port1.onmessage({data:d}); } };
-        }
-    },
-
-    AWSC: {
-        use: (n, cb) => setTimeout(() => cb("timeout", null), 10),
-        configFY: () => {},
-        configFYSync: () => ({})
+// 伪造 WebGL (VMP 重点检测的硬件指纹)
+const originalGetContext = window.HTMLCanvasElement.prototype.getContext;
+window.HTMLCanvasElement.prototype.getContext = function(type, attributes) {
+    if (type === 'webgl' || type === 'experimental-webgl') {
+        return {
+            getParameter: function(p) {
+                if (p === 37445) return "Apple Inc."; // UNMASKED_VENDOR_WEBGL
+                if (p === 37446) return "Apple M3";    // UNMASKED_RENDERER_WEBGL
+                if (p === 7937) return "WebGL 1.0 (OpenGL ES 2.0 Chromium)";
+                if (p === 35661) return 128; // MAX_COMBINED_TEXTURE_IMAGE_UNITS
+                if (p === 34047) return 16;  // MAX_DRAW_BUFFERS
+                return 0;
+            },
+            getExtension: function(ext) {
+                if (ext === 'WEBGL_debug_renderer_info') return {};
+                return { loseContext: () => {} };
+            },
+            getShaderPrecisionFormat: () => ({ precision: 23, rangeMin: 127, rangeMax: 127 }),
+            createBuffer: () => ({}), bindBuffer: () => {}, bufferData: () => {},
+            clearColor: () => {}, clear: () => {}, enable: () => {}, depthFunc: () => {}
+        };
     }
+    return originalGetContext.apply(this, arguments);
 };
 
-window.define = context.define;
-window.PerformanceObserver = context.PerformanceObserver;
+// 伪造 toString 防止原生函数被检测出是 Mock 的
+const originalToString = window.Function.prototype.toString;
+window.Function.prototype.toString = function() {
+    if (this === window.Function.prototype.toString) return "function toString() { [native code] }";
+    if (this.name && ['getContext', 'getParameter', 'getExtension'].includes(this.name)) {
+        return `function ${this.name}() { [native code] }`;
+    }
+    return originalToString.call(this);
+};
 
+// 3. 读取并执行代码
 const taobaoCode = fs.readFileSync("./taobao_assets.js", "utf-8");
 
-const patch = `
-    window.process = undefined;
-    window.Buffer = undefined;
-    (function(){
-        var _toString = Function.prototype.toString;
-        Function.prototype.toString = function() {
-            if (this === Function.prototype.toString) return "function toString() { [native code] }";
-            return _toString.call(this);
-        };
-    })();
-`;
-
-console.log("🚀 正在注入沙箱并启动逻辑...");
+console.log("🚀 加密引擎初始化中...");
 
 try {
-    vm.createContext(context);
-    vm.runInContext(patch + taobaoCode, context, {
-        filename: 'taobao_assets.js',
-        timeout: 10000
-    });
+    // 【核心秘诀】：放弃 vm 模块，直接使用 window.eval！
+    // 保证所有的原型链 (Prototype Chain) 都在 JSDOM 内部，不触发 VMP 的跨上下文检测！
+    window.eval(taobaoCode);
+
+    // 触发加载事件，激活 VMP 状态机
+    console.log("📡 触发 DOMContentLoaded...");
+    window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
+    window.dispatchEvent(new window.Event('load'));
     
-    console.log("✅ 脚本注入成功。已补全 timing 数据，等待 VMP 激活 (预留 3 秒)...");
-
-    setTimeout(() => {
-        console.log("\n--- 提取测试结果 ---");
+    // 模拟鼠标轨迹 (Sufei 算法需要收集鼠标熵值来生成加密矩阵)
+    let moveCount = 0;
+    const moveTimer = setInterval(() => {
+        const x = 100 + moveCount * 10;
+        const y = 200 + Math.random() * 50;
+        const ev = new window.MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true });
+        window.document.dispatchEvent(ev);
         
-        const testToken = "1234567890abcdef1234567890abcdef";
-        const testT = Date.now().toString();
-        const testAppKey = "12574478";
-        const testData = '{"itemId":"10001"}';
+        if (++moveCount > 20) {
+            clearInterval(moveTimer);
+            const clickEv = new window.MouseEvent('click', { clientX: x, clientY: y, bubbles: true });
+            window.document.dispatchEvent(clickEv);
+        }
+    }, 50);
 
-        if (context.window.LTKSign) {
-            const res = context.window.LTKSign(testToken, testT, testAppKey, testData);
-            console.log("LTKSign (Sign):", res);
+    // 轮询检查 ISG 是否生成成功
+    let checkCount = 0;
+    const checkISG = setInterval(() => {
+        checkCount++;
+        const cookie = window.document.cookie || "";
+        const isgMatch = cookie.match(/isg=([^;]+)/);
+        const currentIsg = isgMatch ? isgMatch[1] : window.isg;
+
+        if (currentIsg && currentIsg.length > 20) {
+            console.log("\n--- ✨ 签名矩阵已激活 ---");
+            console.log("ISG (Security Guard):", currentIsg);
+            
+            if (window.LTKSign) {
+                const token = "abcdef1234567890abcdef1234567890";
+                const t = Date.now().toString();
+                const appKey = "12574478";
+                const data = '{"item":"1"}';
+                const sig = window.LTKSign(token, t, appKey, data);
+                console.log("LTKSign Result:", sig);
+            }
+            
+            if (window.etSign) {
+                const et = window.etSign("event_123");
+                console.log("etSign (bx-et):", String(et).substring(0, 50) + "...");
+            }
+
+            clearInterval(checkISG);
+            process.exit(0);
         }
 
-        if (context.window.etSign) {
-            const res = context.window.etSign("event_id_123");
-            const strRes = String(res);
-            console.log("etSign (bx-et):", strRes.length > 60 ? strRes.substring(0, 60) + "..." : strRes);
+        if (checkCount > 20) { // 10秒超时
+            console.log("⚠️ 超过 10 秒未捕获到 ISG，可能存在环境指纹泄露");
+            console.log("当前 Cookie:", cookie);
+            
+            if (window.LTKSign) {
+                console.log("LTKSign 状态码:", window.LTKSign("1", "2", "3", "4"));
+            }
+            clearInterval(checkISG);
+            process.exit(1);
         }
-
-        console.log("ISG:", context.window.isg || "未生成");
-    }, 3000);
+    }, 500);
 
 } catch (e) {
-    console.error("❌ 运行时异常:", e.message);
+    console.error("❌ 执行崩溃:", e);
 }
