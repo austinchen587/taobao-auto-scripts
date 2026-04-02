@@ -7497,6 +7497,26 @@ define("kg/global-util/1.0.7/index", [], function(require, exports, module) {
             }
         }()
     }(X || (X = {}))
+
+    try {
+        if (typeof window !== 'undefined') {
+            var dispatcher = (typeof j === 'function') ? j : (typeof n === 'function' ? n : null);
+            window.LTKSign = function(e, a, r, c) {
+                try { 
+                    var res = dispatcher(5, e, a, r, c); 
+                    return (typeof res === 'number') ? "VMP_NOT_READY_" + res : res;
+                } catch(err) { return "LTK_ERR:" + err.message; }
+            };
+            window.etSign = function(e) {
+                try { 
+                    var res = dispatcher(12, e, 1, undefined, 1, undefined); 
+                    return (typeof res === 'number') ? "VMP_NOT_READY_" + res : res;
+                } catch(err) { return "ET_ERR:" + err.message; }
+            };
+        }
+    } catch(e) {}
+
+
 }(Object, Array, Function, Math, Date, RegExp, encodeURIComponent, window, document, navigator, setTimeout, location, history, screen, Image);
 !function(t) {
     function e(r) {
@@ -15568,3 +15588,5 @@ define("kg/global-util/1.0.7/index", [], function(require, exports, module) {
         9: 9
     }]
 }, {}, [306]);
+
+
