@@ -1,8 +1,11 @@
 const { JSDOM } = require("jsdom");
 const fs = require("fs");
 
-// 1. 初始化 JSDOM (移除 ResourceLoader，使用 pretendToBeVisual 模拟视觉特征)
-const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Taobao</title></head><body><div id="J_SiteNav"></div></body></html>`, {
+// 1. 初始化 JSDOM (加入 seed.js 消除 KISSY 警告)
+const dom = new JSDOM(`<!DOCTYPE html><html><head>
+    <title>Taobao</title>
+    <script src="https://g.alicdn.com/kissy/k/6.2.4/seed.js"></script>
+</head><body><div id="J_SiteNav"></div></body></html>`, {
     url: "https://s.taobao.com/search?q=%E6%89%8B%E6%9C%BA",
     referrer: "https://www.taobao.com/",
     userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
@@ -12,34 +15,29 @@ const dom = new JSDOM(`<!DOCTYPE html><html><head><title>Taobao</title></head><b
 
 const { window } = dom;
 
-// 2. 深度特征伪造 (直接挂载到 JSDOM 的 window 上)
-// 伪造 webdriver (必须是 false，不能抛出异常)
+// 2. 深度特征伪造
 Object.defineProperty(window.navigator, 'webdriver', { get: () => false });
 Object.defineProperty(window.navigator, 'languages', { get: () => ['zh-CN', 'zh'] });
 Object.defineProperty(window.navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
 window.chrome = { app: {}, runtime: {} };
 
-// 伪造 Screen
 Object.defineProperties(window.screen, {
-    width: { get: () => 1920 },
-    height: { get: () => 1080 },
-    availWidth: { get: () => 1920 },
-    availHeight: { get: () => 1040 },
-    colorDepth: { get: () => 24 },
-    pixelDepth: { get: () => 24 }
+    width: { get: () => 1920 }, height: { get: () => 1080 },
+    availWidth: { get: () => 1920 }, availHeight: { get: () => 1040 },
+    colorDepth: { get: () => 24 }, pixelDepth: { get: () => 24 }
 });
 
-// 伪造 WebGL (VMP 重点检测的硬件指纹)
+// WebGL 伪造
 const originalGetContext = window.HTMLCanvasElement.prototype.getContext;
 window.HTMLCanvasElement.prototype.getContext = function(type, attributes) {
     if (type === 'webgl' || type === 'experimental-webgl') {
         return {
             getParameter: function(p) {
-                if (p === 37445) return "Apple Inc."; // UNMASKED_VENDOR_WEBGL
-                if (p === 37446) return "Apple M3";    // UNMASKED_RENDERER_WEBGL
+                if (p === 37445) return "Apple Inc."; 
+                if (p === 37446) return "Apple M3";    
                 if (p === 7937) return "WebGL 1.0 (OpenGL ES 2.0 Chromium)";
-                if (p === 35661) return 128; // MAX_COMBINED_TEXTURE_IMAGE_UNITS
-                if (p === 34047) return 16;  // MAX_DRAW_BUFFERS
+                if (p === 35661) return 128; 
+                if (p === 34047) return 16;  
                 return 0;
             },
             getExtension: function(ext) {
@@ -54,7 +52,6 @@ window.HTMLCanvasElement.prototype.getContext = function(type, attributes) {
     return originalGetContext.apply(this, arguments);
 };
 
-// 伪造 toString 防止原生函数被检测出是 Mock 的
 const originalToString = window.Function.prototype.toString;
 window.Function.prototype.toString = function() {
     if (this === window.Function.prototype.toString) return "function toString() { [native code] }";
@@ -67,34 +64,30 @@ window.Function.prototype.toString = function() {
 // 3. 读取并执行代码
 const taobaoCode = fs.readFileSync("./taobao_assets.js", "utf-8");
 
-console.log("🚀 加密引擎初始化中...");
+console.log("🚀 启动纯净沙箱，正在加载 VMP 引擎...");
 
 try {
-    // 【核心秘诀】：放弃 vm 模块，直接使用 window.eval！
-    // 保证所有的原型链 (Prototype Chain) 都在 JSDOM 内部，不触发 VMP 的跨上下文检测！
+    // 运行淘宝脚本
     window.eval(taobaoCode);
 
-    // 触发加载事件，激活 VMP 状态机
-    console.log("📡 触发 DOMContentLoaded...");
+    console.log("📡 触发 DOMContentLoaded，注入真人轨迹...");
     window.document.dispatchEvent(new window.Event('DOMContentLoaded'));
     window.dispatchEvent(new window.Event('load'));
     
-    // 模拟鼠标轨迹 (Sufei 算法需要收集鼠标熵值来生成加密矩阵)
+    // 注入鼠标轨迹熵值
     let moveCount = 0;
     const moveTimer = setInterval(() => {
         const x = 100 + moveCount * 10;
         const y = 200 + Math.random() * 50;
-        const ev = new window.MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true });
-        window.document.dispatchEvent(ev);
+        window.document.dispatchEvent(new window.MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }));
         
         if (++moveCount > 20) {
             clearInterval(moveTimer);
-            const clickEv = new window.MouseEvent('click', { clientX: x, clientY: y, bubbles: true });
-            window.document.dispatchEvent(clickEv);
+            window.document.dispatchEvent(new window.MouseEvent('click', { clientX: x, clientY: y, bubbles: true }));
         }
     }, 50);
 
-    // 轮询检查 ISG 是否生成成功
+    // 轮询提取 ISG
     let checkCount = 0;
     const checkISG = setInterval(() => {
         checkCount++;
@@ -103,34 +96,17 @@ try {
         const currentIsg = isgMatch ? isgMatch[1] : window.isg;
 
         if (currentIsg && currentIsg.length > 20) {
-            console.log("\n--- ✨ 签名矩阵已激活 ---");
-            console.log("ISG (Security Guard):", currentIsg);
+            console.log("\n✅ --- 签名矩阵解冻成功 --- ✅");
+            console.log("🎯 成功获取 ISG 令牌:");
+            console.log("\x1b[32m%s\x1b[0m", currentIsg); // 绿色高亮打印
+            console.log("\n(注: 此脚本为 sufei_data，仅负责生成 isg。LTKSign 需加载 awsc.js)");
             
-            if (window.LTKSign) {
-                const token = "abcdef1234567890abcdef1234567890";
-                const t = Date.now().toString();
-                const appKey = "12574478";
-                const data = '{"item":"1"}';
-                const sig = window.LTKSign(token, t, appKey, data);
-                console.log("LTKSign Result:", sig);
-            }
-            
-            if (window.etSign) {
-                const et = window.etSign("event_123");
-                console.log("etSign (bx-et):", String(et).substring(0, 50) + "...");
-            }
-
             clearInterval(checkISG);
             process.exit(0);
         }
 
-        if (checkCount > 20) { // 10秒超时
-            console.log("⚠️ 超过 10 秒未捕获到 ISG，可能存在环境指纹泄露");
-            console.log("当前 Cookie:", cookie);
-            
-            if (window.LTKSign) {
-                console.log("LTKSign 状态码:", window.LTKSign("1", "2", "3", "4"));
-            }
+        if (checkCount > 20) {
+            console.log("⚠️ 提取超时，请检查网络或脚本完整性");
             clearInterval(checkISG);
             process.exit(1);
         }
